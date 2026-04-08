@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="id">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Pendaftaran Klinik</title>
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css"
+    />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="page">
+      <section class="hero">
+        <div>
+          <div class="clinic-header">
+            <div class="clinic-logo-wrap">
+              <img
+                class="clinic-logo"
+                src="/Gemini_Generated_Image_26dd4d26dd4d26dd-removebg-preview.png"
+                alt="Logo Klinik Sehat"
+              />
+            </div>
+            <div class="clinic-text">
+              <div class="clinic-name">Klinik Sehat</div>
+              <p class="clinic-address">
+                Bukit Cendana J01/11 CITRA INDAH CITY, Sukamaju - Jonggol. BOGOR 16830
+                <br />
+                WA : 081808348727
+              </p>
+            </div>
+          </div>
+          <h1>Pendaftaran Pasien Online</h1>
+          <p class="subtitle">
+            Isi data di bawah ini untuk mendapatkan nomor antrean. Kami akan
+            mengirimkan konfirmasi melalui email.
+          </p>
+        </div>
+        <div class="info-card">
+          <h2>Jam Layanan</h2>
+          <p>Senin - Sabtu</p>
+          <p>08.00 - 20.00 WIB</p>
+          <p class="info-note">Datang 15 menit sebelum jadwal.</p>
+        </div>
+      </section>
+
+      <section class="form-card">
+        <form id="registration-form">
+          <div class="grid">
+            <label>
+              Nama Lengkap*
+              <input type="text" name="fullName" placeholder="Nama sesuai KTP" required />
+            </label>
+            <label>
+              NIK
+              <input type="text" name="nik" placeholder="Nomor KTP" />
+            </label>
+            <label>
+              Tanggal Lahir
+              <input
+                type="tel"
+                name="birthDate"
+                class="birth-date"
+                placeholder="..../..../...."
+                inputmode="numeric"
+                maxlength="10"
+                autocomplete="off"
+              />
+            </label>
+            <label>
+              Jenis Kelamin
+              <select name="gender">
+                <option value="">Pilih</option>
+                <option value="Laki-laki">Laki-laki</option>
+                <option value="Perempuan">Perempuan</option>
+              </select>
+            </label>
+            <label>
+              Nomor HP*
+              <input type="tel" name="phone" placeholder="08xxxxxxxxxx" required />
+            </label>
+            <label>
+              Email* (Disarankan akun gmail)
+              <input type="email" name="email" placeholder="nama@gmail.com" required />
+            </label>
+            <label class="span-2">
+              Alamat
+              <textarea name="address" rows="2" placeholder="Alamat saat ini"></textarea>
+            </label>
+            <label class="span-2">
+              Keluhan
+              <textarea name="complaint" rows="3" placeholder="Tuliskan keluhan singkat"></textarea>
+            </label>
+            <label>
+              Tanggal Kunjungan
+              <input type="text" name="visitDate" class="date-picker" placeholder="dd/mm/yyyy" />
+            </label>
+          </div>
+          <button type="submit" class="primary" id="submit-button">
+            <span class="btn-text">Dapatkan Nomor Antrean</span>
+            <span class="btn-spinner" aria-hidden="true"></span>
+          </button>
+        </form>
+        <div id="result" class="result hidden"></div>
+      </section>
+    </main>
+
+    <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
+    <script src="https://cdn.jsdelivr.net/npm/flatpickr/dist/l10n/id.js"></script>
+    <script src="/app.js"></script>
+  </body>
+</html>
