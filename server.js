@@ -182,21 +182,29 @@ async function sendEmail({ to, subject, text, html, attachments, replyTo }) {
     host: process.env.SMTP_HOST,
     port: Number(process.env.SMTP_PORT),
     secure: process.env.SMTP_SECURE === 'true',
+    connectionTimeout: 10000,
+    greetingTimeout: 10000,
+    socketTimeout: 15000,
     auth: {
       user: process.env.SMTP_USER,
       pass: process.env.SMTP_PASS,
     },
   });
 
-  await transporter.sendMail({
-    from: process.env.SMTP_FROM,
-    to,
-    subject,
-    text,
-    html,
-    attachments,
-    replyTo,
-  });
+  await Promise.race([
+    transporter.sendMail({
+      from: process.env.SMTP_FROM,
+      to,
+      subject,
+      text,
+      html,
+      attachments,
+      replyTo,
+    }),
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('SMTP timeout after 15s')), 15000)
+    ),
+  ]);
 
   return { skipped: false };
 }
@@ -346,58 +354,60 @@ app.post('/api/registrations', async (req, res) => {
         console.error('PDF generation failed:', pdfError);
       }
 
-      let emailResult = { skipped: true };
-      try {
-        const downloadUrl = `${baseUrl}/download/${registrationResult.rows[0].id}`;
-        const displayVisitDate = formatDateId(queueDate);
-        const emailHtml = `
-          <div style="font-family: Arial, sans-serif; color: #0f172a;">
-            <h2>Bukti Pendaftaran Klinik</h2>
-            <p>Halo ${fullName},</p>
-            <p>Pendaftaran Anda berhasil.</p>
-            <ul>
-              <li>Tanggal kunjungan: <strong>${displayVisitDate}</strong></li>
-              <li>Nomor antrean: <strong>${queueNumber}</strong></li>
-            </ul>
-            <p>Silakan unduh bukti pendaftaran:</p>
-            <p>
-              <a href="${downloadUrl}" style="display:inline-block;padding:10px 16px;background:#0f766e;color:#ffffff;text-decoration:none;border-radius:8px;">
-                Download Form (PDF)
-              </a>
-            </p>
-            <p>Atau gunakan lampiran PDF pada email ini.</p>
-          </div>
-        `;
+      const downloadUrl = `${baseUrl}/download/${registrationResult.rows[0].id}`;
+      const displayVisitDate = formatDateId(queueDate);
+      const emailHtml = `
+        <div style="font-family: Arial, sans-serif; color: #0f172a;">
+          <h2>Bukti Pendaftaran Klinik</h2>
+          <p>Halo ${fullName},</p>
+          <p>Pendaftaran Anda berhasil.</p>
+          <ul>
+            <li>Tanggal kunjungan: <strong>${displayVisitDate}</strong></li>
+            <li>Nomor antrean: <strong>${queueNumber}</strong></li>
+          </ul>
+          <p>Silakan unduh bukti pendaftaran:</p>
+          <p>
+            <a href="${downloadUrl}" style="display:inline-block;padding:10px 16px;background:#0f766e;color:#ffffff;text-decoration:none;border-radius:8px;">
+              Download Form (PDF)
+            </a>
+          </p>
+          <p>Atau gunakan lampiran PDF pada email ini.</p>
+        </div>
+      `;
 
-        emailResult = await sendEmail({
-          to: email,
-          subject: 'Konfirmasi Pendaftaran Klinik',
-          text:
-            `Halo ${fullName},\n\n` +
-            `Pendaftaran Anda berhasil.\n` +
-            `Tanggal kunjungan: ${displayVisitDate}\n` +
-            `Nomor antrean: ${queueNumber}\n\n` +
-            `Unduh bukti pendaftaran: ${downloadUrl}\n\n` +
-            `Simpan email ini sebagai bukti pendaftaran.`,
-          html: emailHtml,
-          attachments: pdfAttachment ? [pdfAttachment] : undefined,
-          replyTo: getReplyTo(email),
-        });
-      } catch (emailError) {
-        console.error('Email send failed:', emailError);
-        emailResult = { skipped: true, error: true };
-      }
-
-      return res.status(201).json({
+      const responsePayload = {
         registrationId: registrationResult.rows[0].id,
         queueDate,
         queueNumber,
-        notification: emailResult.error
-          ? 'FAILED'
-          : emailResult.skipped
-          ? 'SKIPPED'
-          : 'SENT',
-      });
+        notification: smtpEnabled ? 'QUEUED' : 'SKIPPED',
+      };
+
+      res.status(201).json(responsePayload);
+
+      if (smtpEnabled) {
+        setImmediate(async () => {
+          try {
+            await sendEmail({
+              to: email,
+              subject: 'Konfirmasi Pendaftaran Klinik',
+              text:
+                `Halo ${fullName},\n\n` +
+                `Pendaftaran Anda berhasil.\n` +
+                `Tanggal kunjungan: ${displayVisitDate}\n` +
+                `Nomor antrean: ${queueNumber}\n\n` +
+                `Unduh bukti pendaftaran: ${downloadUrl}\n\n` +
+                `Simpan email ini sebagai bukti pendaftaran.`,
+              html: emailHtml,
+              attachments: pdfAttachment ? [pdfAttachment] : undefined,
+              replyTo: getReplyTo(email),
+            });
+          } catch (emailError) {
+            console.error('Email send failed:', emailError);
+          }
+        });
+      }
+
+      return;
     } catch (error) {
       await client.query('ROLLBACK');
       console.error('Registration transaction failed:', error);
