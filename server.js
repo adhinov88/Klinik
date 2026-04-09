@@ -34,6 +34,7 @@ const smtpEnabled = Boolean(
     process.env.SMTP_FROM &&
     process.env.SMTP_HOST !== 'smtp.example.com'
 );
+const resendEnabled = Boolean(process.env.RESEND_API_KEY && process.env.SMTP_FROM);
 const replyToTarget = (process.env.REPLY_TO_TARGET || 'admin').toLowerCase();
 const replyToAdmin = process.env.REPLY_TO_ADMIN;
 
@@ -174,8 +175,43 @@ async function buildRegistrationPdf(data) {
 }
 
 async function sendEmail({ to, subject, text, html, attachments, replyTo }) {
+  if (resendEnabled) {
+    const resendAttachments = (attachments || []).map((attachment) => ({
+      filename: attachment.filename,
+      content: Buffer.isBuffer(attachment.content)
+        ? attachment.content.toString('base64')
+        : attachment.content,
+    }));
+
+    const resendPayload = {
+      from: process.env.SMTP_FROM,
+      to: [to],
+      subject,
+      text,
+      html,
+      reply_to: replyTo ? [replyTo] : undefined,
+      attachments: resendAttachments.length > 0 ? resendAttachments : undefined,
+    };
+
+    const response = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(resendPayload),
+    });
+
+    if (!response.ok) {
+      const body = await response.text();
+      throw new Error(`Resend error ${response.status}: ${body}`);
+    }
+
+    return { skipped: false, provider: 'resend' };
+  }
+
   if (!smtpEnabled) {
-    return { skipped: true };
+    return { skipped: true, provider: 'none' };
   }
 
   const transporter = nodemailer.createTransport({
@@ -206,7 +242,7 @@ async function sendEmail({ to, subject, text, html, attachments, replyTo }) {
     ),
   ]);
 
-  return { skipped: false };
+  return { skipped: false, provider: 'smtp' };
 }
 
 app.use(express.json());
@@ -379,12 +415,12 @@ app.post('/api/registrations', async (req, res) => {
         registrationId: registrationResult.rows[0].id,
         queueDate,
         queueNumber,
-        notification: smtpEnabled ? 'QUEUED' : 'SKIPPED',
+        notification: smtpEnabled || resendEnabled ? 'QUEUED' : 'SKIPPED',
       };
 
       res.status(201).json(responsePayload);
 
-      if (smtpEnabled) {
+      if (smtpEnabled || resendEnabled) {
         setImmediate(async () => {
           try {
             await sendEmail({
