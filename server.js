@@ -48,16 +48,35 @@ function getJakartaDate() {
   return formatter.format(new Date());
 }
 
-function isValidDate(value) {
-  return /^\d{4}-\d{2}-\d{2}$/.test(value);
-}
-
 function parseDateInput(value) {
   if (!value) return null;
-  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
-  const match = value.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
-  if (!match) return null;
-  const [_, dd, mm, yyyy] = match;
+  let yyyy;
+  let mm;
+  let dd;
+
+  const ymd = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (ymd) {
+    yyyy = ymd[1];
+    mm = ymd[2];
+    dd = ymd[3];
+  } else {
+    const dmy = value.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    if (!dmy) return null;
+    dd = dmy[1];
+    mm = dmy[2];
+    yyyy = dmy[3];
+  }
+
+  const y = Number(yyyy);
+  const m = Number(mm);
+  const d = Number(dd);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  const valid =
+    dt.getUTCFullYear() === y &&
+    dt.getUTCMonth() + 1 === m &&
+    dt.getUTCDate() === d;
+
+  if (!valid) return null;
   return `${yyyy}-${mm}-${dd}`;
 }
 
@@ -70,6 +89,7 @@ function formatDateId(dateValue) {
     }
   }
   const date = dateValue instanceof Date ? dateValue : new Date(dateValue);
+  if (Number.isNaN(date.getTime())) return '-';
   return new Intl.DateTimeFormat('id-ID', {
     day: '2-digit',
     month: 'long',
@@ -304,14 +324,14 @@ app.post('/api/registrations', async (req, res) => {
     const parsedVisitDate = parseDateInput(visitDate);
     if (visitDate && !parsedVisitDate) {
       return res.status(400).json({
-        error: 'Format tanggal kunjungan harus dd/mm/yyyy.',
+        error: 'Tanggal kunjungan tidak valid. Gunakan format dd/mm/yyyy.',
       });
     }
 
     const parsedBirthDate = parseDateInput(birthDate);
     if (birthDate && !parsedBirthDate) {
       return res.status(400).json({
-        error: 'Format tanggal lahir harus dd/mm/yyyy.',
+        error: 'Tanggal lahir tidak valid. Gunakan format dd/mm/yyyy.',
       });
     }
 
