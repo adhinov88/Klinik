@@ -442,6 +442,10 @@ app.post('/api/registrations', async (req, res) => {
               Download Form (JPG)
             </a>
           </p>
+          <p style="margin-top:8px;">
+            Jika tombol tidak tampil, gunakan link ini:
+            <a href="${downloadUrl}">${downloadUrl}</a>
+          </p>
           <p>Atau gunakan lampiran JPG pada email ini.</p>
         </div>
       `;
