@@ -128,6 +128,7 @@ async function buildRegistrationImage(data) {
   const image = new Jimp({ width: canvasWidth, height: canvasHeight, color: 0xffffffff });
   const titleFont = await loadFont(SANS_32_BLACK);
   const bodyFont = await loadFont(SANS_16_BLACK);
+  const detailFont = await loadFont(SANS_32_BLACK);
   const smallFont = await loadFont(SANS_14_BLACK);
 
   image.print({
@@ -183,11 +184,12 @@ async function buildRegistrationImage(data) {
   if (data.address) detailLines.push(`Alamat: ${data.address}`);
   if (data.complaint) detailLines.push(`Keluhan: ${data.complaint}`);
 
+  const detailText = detailLines.join('\n\n');
   image.print({
-    font: bodyFont,
+    font: detailFont,
     x: 430,
-    y: 360,
-    text: detailLines.join('\n'),
+    y: 340,
+    text: detailText,
     maxWidth: canvasWidth - 500,
   });
 
