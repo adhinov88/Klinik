@@ -3,17 +3,18 @@ const fs = require('fs');
 const express = require('express');
 const { Pool } = require('pg');
 const nodemailer = require('nodemailer');
-const PDFDocument = require('pdfkit');
+const { Jimp, loadFont, HorizontalAlign } = require('jimp');
+const { SANS_14_BLACK, SANS_16_BLACK, SANS_32_BLACK } = require('@jimp/plugin-print/fonts');
 const QRCode = require('qrcode');
 require('dotenv').config();
 
 const app = express();
 const port = process.env.PORT || 3000;
 const baseUrl = process.env.PUBLIC_BASE_URL || `http://localhost:${port}`;
-const pdfDir = path.join(__dirname, 'storage', 'pdfs');
+const attachmentDir = path.join(__dirname, 'storage', 'documents');
 
-if (!fs.existsSync(pdfDir)) {
-  fs.mkdirSync(pdfDir, { recursive: true });
+if (!fs.existsSync(attachmentDir)) {
+  fs.mkdirSync(attachmentDir, { recursive: true });
 }
 
 const pool = new Pool({
@@ -119,79 +120,89 @@ function getReplyTo(patientEmail) {
   return replyToAdmin || patientEmail;
 }
 
-async function buildRegistrationPdf(data) {
-  let qrBuffer = null;
-  try {
-    qrBuffer = await QRCode.toBuffer(buildRegistrationQrPayload(data), {
-      type: 'png',
-      errorCorrectionLevel: 'M',
-      margin: 1,
-      width: 220,
-    });
-  } catch (error) {
-    console.error('QR generation failed:', error);
-  }
+async function buildRegistrationImage(data) {
+  const canvasWidth = 1240;
+  const canvasHeight = 1754;
+  const leftMargin = 72;
 
-  return new Promise((resolve, reject) => {
-    try {
-      const doc = new PDFDocument({ size: 'A4', margin: 50 });
-      const chunks = [];
+  const image = new Jimp({ width: canvasWidth, height: canvasHeight, color: 0xffffffff });
+  const titleFont = await loadFont(SANS_32_BLACK);
+  const bodyFont = await loadFont(SANS_16_BLACK);
+  const smallFont = await loadFont(SANS_14_BLACK);
 
-      doc.on('data', (chunk) => chunks.push(chunk));
-      doc.on('end', () => resolve(Buffer.concat(chunks)));
-
-      doc.fontSize(20).text('Bukti Pendaftaran Klinik', { align: 'center' });
-      doc.moveDown(0.5);
-      doc.fontSize(12).text('Harap tunjukkan dokumen ini saat pendaftaran di klinik.', {
-        align: 'center',
-      });
-
-      const contentTop = 190;
-      const leftX = doc.page.margins.left;
-      const rightX = doc.page.width - doc.page.margins.right;
-
-      let textStartX = leftX;
-      let textWidth = rightX - leftX;
-
-      if (qrBuffer) {
-        const qrSize = 180;
-        const qrX = leftX;
-        const qrY = contentTop;
-        doc.image(qrBuffer, qrX, qrY, { width: qrSize });
-        doc
-          .fontSize(10)
-          .text('QR Verifikasi', qrX, qrY + qrSize + 6, { width: qrSize, align: 'center' });
-
-        textStartX = qrX + qrSize + 24;
-        textWidth = rightX - textStartX;
-      }
-
-      let textY = contentTop;
-      doc.fontSize(12).text(`Nama Pasien: ${data.fullName}`, textStartX, textY, {
-        width: textWidth,
-      });
-      doc.text(`Nomor Antrean: ${data.queueNumber}`, { width: textWidth });
-      doc.text(`Tanggal Kunjungan: ${formatDateId(data.queueDate)}`, { width: textWidth });
-      doc.text(`Nomor HP: ${data.phone}`, { width: textWidth });
-      doc.text(`Email: ${data.email}`, { width: textWidth });
-      if (data.nik) doc.text(`NIK: ${data.nik}`, { width: textWidth });
-      if (data.birthDate)
-        doc.text(`Tanggal Lahir: ${formatDateId(data.birthDate)}`, { width: textWidth });
-      if (data.gender) doc.text(`Jenis Kelamin: ${data.gender}`, { width: textWidth });
-      if (data.address) doc.text(`Alamat: ${data.address}`, { width: textWidth });
-      if (data.complaint) doc.text(`Keluhan: ${data.complaint}`, { width: textWidth });
-
-      doc.moveDown(2);
-      doc
-        .fontSize(10)
-        .text(`ID Registrasi: ${data.registrationId}`, { align: 'right' })
-        .text(`Dibuat: ${formatDateId(new Date())}`, { align: 'right' });
-
-      doc.end();
-    } catch (error) {
-      reject(error);
-    }
+  image.print({
+    font: titleFont,
+    x: 0,
+    y: 64,
+    text: {
+      text: 'Bukti Pendaftaran Klinik',
+      alignmentX: HorizontalAlign.CENTER,
+    },
+    maxWidth: canvasWidth,
   });
+  image.print({
+    font: bodyFont,
+    x: 0,
+    y: 130,
+    text: {
+      text: 'Harap tunjukkan dokumen ini saat pendaftaran di klinik.',
+      alignmentX: HorizontalAlign.CENTER,
+    },
+    maxWidth: canvasWidth,
+  });
+
+  const qrBuffer = await QRCode.toBuffer(buildRegistrationQrPayload(data), {
+    type: 'png',
+    errorCorrectionLevel: 'M',
+    margin: 1,
+    width: 320,
+  });
+  const qrImage = await Jimp.read(qrBuffer);
+  image.composite(qrImage, leftMargin, 350);
+  image.print({
+    font: smallFont,
+    x: leftMargin,
+    y: 680,
+    text: {
+      text: 'QR Verifikasi',
+      alignmentX: HorizontalAlign.CENTER,
+    },
+    maxWidth: 320,
+  });
+
+  const detailLines = [
+    `Nama Pasien: ${data.fullName}`,
+    `Nomor Antrean: ${data.queueNumber}`,
+    `Tanggal Kunjungan: ${formatDateId(data.queueDate)}`,
+    `Nomor HP: ${data.phone}`,
+    `Email: ${data.email}`,
+  ];
+  if (data.nik) detailLines.push(`NIK: ${data.nik}`);
+  if (data.birthDate) detailLines.push(`Tanggal Lahir: ${formatDateId(data.birthDate)}`);
+  if (data.gender) detailLines.push(`Jenis Kelamin: ${data.gender}`);
+  if (data.address) detailLines.push(`Alamat: ${data.address}`);
+  if (data.complaint) detailLines.push(`Keluhan: ${data.complaint}`);
+
+  image.print({
+    font: bodyFont,
+    x: 430,
+    y: 360,
+    text: detailLines.join('\n'),
+    maxWidth: canvasWidth - 500,
+  });
+
+  image.print({
+    font: bodyFont,
+    x: 0,
+    y: 1450,
+    text: {
+      text: `ID Registrasi: ${data.registrationId}\nDibuat: ${formatDateId(new Date())}`,
+      alignmentX: HorizontalAlign.RIGHT,
+    },
+    maxWidth: canvasWidth - leftMargin,
+  });
+
+  return image.getBuffer('image/jpeg');
 }
 
 async function sendEmail({ to, subject, text, html, attachments, replyTo }) {
@@ -289,12 +300,12 @@ app.get('/download/:id', async (req, res) => {
       return res.status(404).send('Data tidak ditemukan.');
     }
 
-    const filePath = path.join(pdfDir, `bukti-pendaftaran-${registrationId}.pdf`);
+    const filePath = path.join(attachmentDir, `bukti-pendaftaran-${registrationId}.jpg`);
     if (!fs.existsSync(filePath)) {
       return res.status(404).send('File tidak ditemukan.');
     }
 
-    res.download(filePath, `bukti-pendaftaran-${result.rows[0].queue_number}.pdf`);
+    res.download(filePath, `bukti-pendaftaran-${result.rows[0].queue_number}.jpg`);
   } catch (error) {
     console.error('Download error:', error);
     return res.status(500).send('Gagal mengunduh.');
@@ -383,10 +394,9 @@ app.post('/api/registrations', async (req, res) => {
 
       await client.query('COMMIT');
 
-      let pdfAttachment = null;
-      let pdfFilePath = null;
+      let imageAttachment = null;
       try {
-        const pdfBuffer = await buildRegistrationPdf({
+        const imageBuffer = await buildRegistrationImage({
           registrationId: registrationResult.rows[0].id,
           fullName,
           nik,
@@ -399,15 +409,18 @@ app.post('/api/registrations', async (req, res) => {
           queueDate,
           queueNumber,
         });
-        pdfFilePath = path.join(pdfDir, `bukti-pendaftaran-${registrationResult.rows[0].id}.pdf`);
-        fs.writeFileSync(pdfFilePath, pdfBuffer);
-        pdfAttachment = {
-          filename: `bukti-pendaftaran-${queueNumber}.pdf`,
-          content: pdfBuffer,
-          contentType: 'application/pdf',
+        const imageFilePath = path.join(
+          attachmentDir,
+          `bukti-pendaftaran-${registrationResult.rows[0].id}.jpg`
+        );
+        fs.writeFileSync(imageFilePath, imageBuffer);
+        imageAttachment = {
+          filename: `bukti-pendaftaran-${queueNumber}.jpg`,
+          content: imageBuffer,
+          contentType: 'image/jpeg',
         };
-      } catch (pdfError) {
-        console.error('PDF generation failed:', pdfError);
+      } catch (imageError) {
+        console.error('JPG generation failed:', imageError);
       }
 
       const downloadUrl = `${baseUrl}/download/${registrationResult.rows[0].id}`;
@@ -424,10 +437,10 @@ app.post('/api/registrations', async (req, res) => {
           <p>Silakan unduh bukti pendaftaran:</p>
           <p>
             <a href="${downloadUrl}" style="display:inline-block;padding:10px 16px;background:#0f766e;color:#ffffff;text-decoration:none;border-radius:8px;">
-              Download Form (PDF)
+              Download Form (JPG)
             </a>
           </p>
-          <p>Atau gunakan lampiran PDF pada email ini.</p>
+          <p>Atau gunakan lampiran JPG pada email ini.</p>
         </div>
       `;
 
@@ -454,7 +467,7 @@ app.post('/api/registrations', async (req, res) => {
                 `Unduh bukti pendaftaran: ${downloadUrl}\n\n` +
                 `Simpan email ini sebagai bukti pendaftaran.`,
               html: emailHtml,
-              attachments: pdfAttachment ? [pdfAttachment] : undefined,
+              attachments: imageAttachment ? [imageAttachment] : undefined,
               replyTo: getReplyTo(email),
             });
           } catch (emailError) {
