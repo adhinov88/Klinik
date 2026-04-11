@@ -127,6 +127,7 @@ async function buildRegistrationImage(data) {
 
   const image = new Jimp({ width: canvasWidth, height: canvasHeight, color: 0xffffffff });
   const titleFont = await loadFont(SANS_32_BLACK);
+  const subtitleFont = await loadFont(SANS_32_BLACK);
   const bodyFont = await loadFont(SANS_16_BLACK);
   const detailFont = await loadFont(SANS_32_BLACK);
   const smallFont = await loadFont(SANS_14_BLACK);
@@ -142,14 +143,14 @@ async function buildRegistrationImage(data) {
     maxWidth: canvasWidth,
   });
   image.print({
-    font: bodyFont,
+    font: subtitleFont,
     x: 0,
-    y: 130,
+    y: 170,
     text: {
       text: 'Harap tunjukkan dokumen ini saat pendaftaran di klinik.',
       alignmentX: HorizontalAlign.CENTER,
     },
-    maxWidth: canvasWidth,
+    maxWidth: canvasWidth - 120,
   });
 
   const qrBuffer = await QRCode.toBuffer(buildRegistrationQrPayload(data), {
