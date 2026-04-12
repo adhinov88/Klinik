@@ -333,11 +333,26 @@ app.post('/api/registrations', async (req, res) => {
       email,
       address,
       complaint,
+      visitDate,
     } = req.body;
 
     if (!fullName || !phone || !email) {
       return res.status(400).json({
         error: 'Nama lengkap, nomor HP, dan email wajib diisi.',
+      });
+    }
+
+    const parsedVisitDate = parseDateInput(visitDate);
+    if (visitDate && !parsedVisitDate) {
+      return res.status(400).json({
+        error: 'Tanggal kunjungan tidak valid. Gunakan format dd/mm/yyyy.',
+      });
+    }
+
+    const jakartaToday = getJakartaDate();
+    if (parsedVisitDate && parsedVisitDate < jakartaToday) {
+      return res.status(400).json({
+        error: 'Tanggal kunjungan tidak boleh tanggal kemarin atau sebelumnya.',
       });
     }
 
@@ -348,8 +363,8 @@ app.post('/api/registrations', async (req, res) => {
       });
     }
 
-    // Queue number resets daily at 24:00 WIB.
-    const queueDate = getJakartaDate();
+    // Queue number resets per visit date at 24:00 WIB.
+    const queueDate = parsedVisitDate || jakartaToday;
 
     const client = await pool.connect();
     try {

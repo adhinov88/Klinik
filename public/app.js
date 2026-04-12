@@ -38,9 +38,23 @@ function getJakartaTodayDmy() {
   return `${day}/${month}/${year}`;
 }
 
-function setVisitDateToday() {
-  if (!visitDateInput) return;
-  visitDateInput.value = getJakartaTodayDmy();
+function getJakartaTodayYmd() {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Jakarta',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date());
+  const day = parts.find((p) => p.type === 'day')?.value;
+  const month = parts.find((p) => p.type === 'month')?.value;
+  const year = parts.find((p) => p.type === 'year')?.value;
+  return `${year}-${month}-${day}`;
+}
+
+function parseDmyToYmd(value) {
+  const match = value.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (!match) return null;
+  return `${match[3]}-${match[2]}-${match[1]}`;
 }
 
 form.addEventListener('submit', async (event) => {
@@ -56,6 +70,15 @@ form.addEventListener('submit', async (event) => {
   if (!payload.fullName || !payload.phone || !payload.email) {
     showResult('Nama lengkap, nomor HP, dan email wajib diisi.', 'error');
     return;
+  }
+
+  if (payload.visitDate) {
+    const visitDateYmd = parseDmyToYmd(payload.visitDate);
+    const todayYmd = getJakartaTodayYmd();
+    if (!visitDateYmd || visitDateYmd < todayYmd) {
+      showResult('Tanggal kunjungan tidak boleh tanggal kemarin atau sebelumnya.', 'error');
+      return;
+    }
   }
 
   setSubmitting(true);
@@ -80,7 +103,6 @@ form.addEventListener('submit', async (event) => {
       'success'
     );
     form.reset();
-    setVisitDateToday();
   } catch (error) {
     showResult('Terjadi gangguan koneksi. Silakan coba lagi.', 'error');
   } finally {
@@ -91,15 +113,12 @@ form.addEventListener('submit', async (event) => {
 if (window.flatpickr && visitDateInput) {
   window.flatpickr(visitDateInput, {
     dateFormat: 'd/m/Y',
-    allowInput: false,
+    allowInput: true,
     disableMobile: true,
     locale: 'id',
     defaultDate: getJakartaTodayDmy(),
-    clickOpens: false,
   });
 }
-
-setVisitDateToday();
 
 function formatBirthDate(value) {
   const digits = value.replace(/\D/g, '').slice(0, 8);
