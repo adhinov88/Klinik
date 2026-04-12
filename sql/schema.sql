@@ -14,12 +14,13 @@ CREATE TABLE IF NOT EXISTS registrations (
   address TEXT,
   complaint TEXT,
   visit_date DATE NOT NULL,
+  queue_date DATE NOT NULL,
   queue_number INTEGER NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS registrations_queue_unique
-  ON registrations (visit_date, queue_number);
+CREATE INDEX IF NOT EXISTS registrations_queue_date_idx
+  ON registrations (queue_date, queue_number);
 
 CREATE INDEX IF NOT EXISTS registrations_visit_date_idx
   ON registrations (visit_date);

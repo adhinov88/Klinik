@@ -34,6 +34,25 @@ pool.on('connect', (client) => {
   });
 });
 
+async function ensureSchema() {
+  const client = await pool.connect();
+  try {
+    await client.query(`ALTER TABLE registrations ADD COLUMN IF NOT EXISTS queue_date DATE`);
+    await client.query(`
+      UPDATE registrations
+      SET queue_date = (created_at AT TIME ZONE 'Asia/Jakarta')::date
+      WHERE queue_date IS NULL
+    `);
+    await client.query(`DROP INDEX IF EXISTS registrations_queue_unique`);
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS registrations_queue_date_idx
+      ON registrations (queue_date, queue_number)
+    `);
+  } finally {
+    client.release();
+  }
+}
+
 const smtpEnabled = Boolean(
   process.env.SMTP_HOST &&
     process.env.SMTP_PORT &&
@@ -110,7 +129,8 @@ function buildRegistrationQrPayload(data) {
   return JSON.stringify({
     v: 1,
     id: data.registrationId,
-    queueDate: data.queueDate,
+    queueDate: data.queueDate || null,
+    visitDate: data.visitDate || null,
     queueNumber: data.queueNumber,
     fullName: data.fullName,
   });
@@ -182,7 +202,7 @@ async function buildRegistrationImage(data) {
   const detailLines = [
     `Nama Pasien: ${data.fullName}`,
     `Nomor Antrean: ${data.queueNumber}`,
-    `Tanggal Kunjungan: ${formatDateId(data.queueDate)}`,
+    `Tanggal Kunjungan: ${formatDateId(data.visitDate)}`,
     `Nomor HP: ${data.phone}`,
     `Email: ${data.email}`,
   ];
@@ -363,8 +383,9 @@ app.post('/api/registrations', async (req, res) => {
       });
     }
 
-    // Queue number resets per visit date at 24:00 WIB.
-    const queueDate = parsedVisitDate || jakartaToday;
+    // Queue resets daily based on registration date (WIB, 24:00).
+    const queueDate = jakartaToday;
+    const targetVisitDate = parsedVisitDate || jakartaToday;
 
     const client = await pool.connect();
     try {
@@ -392,9 +413,10 @@ app.post('/api/registrations', async (req, res) => {
           address,
           complaint,
           visit_date,
+          queue_date,
           queue_number
         )
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
         RETURNING id;`,
         [
           fullName,
@@ -405,6 +427,7 @@ app.post('/api/registrations', async (req, res) => {
           email,
           address || null,
           complaint || null,
+          targetVisitDate,
           queueDate,
           queueNumber,
         ]
@@ -425,6 +448,7 @@ app.post('/api/registrations', async (req, res) => {
           address,
           complaint,
           queueDate,
+          visitDate: targetVisitDate,
           queueNumber,
         });
         const imageFilePath = path.join(
@@ -442,7 +466,7 @@ app.post('/api/registrations', async (req, res) => {
       }
 
       const downloadUrl = `${baseUrl}/download/${registrationResult.rows[0].id}`;
-      const displayVisitDate = formatDateId(queueDate);
+      const displayVisitDate = formatDateId(targetVisitDate);
       const emailHtml = `
         <div style="font-family: Arial, sans-serif; color: #0f172a;">
           <h2>Bukti Pendaftaran Klinik</h2>
@@ -468,7 +492,7 @@ app.post('/api/registrations', async (req, res) => {
 
       const responsePayload = {
         registrationId: registrationResult.rows[0].id,
-        queueDate,
+        queueDate: targetVisitDate,
         queueNumber,
         notification: smtpEnabled || resendEnabled ? 'QUEUED' : 'SKIPPED',
       };
@@ -518,6 +542,13 @@ app.post('/api/registrations', async (req, res) => {
   }
 });
 
-app.listen(port, () => {
-  console.log(`Server running at http://localhost:${port}`);
-});
+ensureSchema()
+  .then(() => {
+    app.listen(port, () => {
+      console.log(`Server running at http://localhost:${port}`);
+    });
+  })
+  .catch((error) => {
+    console.error('Failed to initialize schema:', error);
+    process.exit(1);
+  });
