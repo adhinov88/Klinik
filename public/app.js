@@ -25,6 +25,24 @@ function formatDateDisplay(value) {
   return `${match[3]}/${match[2]}/${match[1]}`;
 }
 
+function getJakartaTodayDmy() {
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Jakarta',
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+  }).formatToParts(new Date());
+  const day = parts.find((p) => p.type === 'day')?.value;
+  const month = parts.find((p) => p.type === 'month')?.value;
+  const year = parts.find((p) => p.type === 'year')?.value;
+  return `${day}/${month}/${year}`;
+}
+
+function setVisitDateToday() {
+  if (!visitDateInput) return;
+  visitDateInput.value = getJakartaTodayDmy();
+}
+
 form.addEventListener('submit', async (event) => {
   event.preventDefault();
   resultBox.classList.add('hidden');
@@ -62,6 +80,7 @@ form.addEventListener('submit', async (event) => {
       'success'
     );
     form.reset();
+    setVisitDateToday();
   } catch (error) {
     showResult('Terjadi gangguan koneksi. Silakan coba lagi.', 'error');
   } finally {
@@ -72,11 +91,15 @@ form.addEventListener('submit', async (event) => {
 if (window.flatpickr && visitDateInput) {
   window.flatpickr(visitDateInput, {
     dateFormat: 'd/m/Y',
-    allowInput: true,
+    allowInput: false,
     disableMobile: true,
     locale: 'id',
+    defaultDate: getJakartaTodayDmy(),
+    clickOpens: false,
   });
 }
+
+setVisitDateToday();
 
 function formatBirthDate(value) {
   const digits = value.replace(/\D/g, '').slice(0, 8);

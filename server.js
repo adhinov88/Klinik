@@ -27,6 +27,13 @@ const pool = new Pool({
   ssl: process.env.DATABASE_SSL === 'true' ? { rejectUnauthorized: false } : undefined,
 });
 
+// Ensure DB session uses WIB for date/time operations in this app.
+pool.on('connect', (client) => {
+  client.query("SET TIME ZONE 'Asia/Jakarta'").catch((error) => {
+    console.error('Failed to set DB timezone:', error);
+  });
+});
+
 const smtpEnabled = Boolean(
   process.env.SMTP_HOST &&
     process.env.SMTP_PORT &&
@@ -326,19 +333,11 @@ app.post('/api/registrations', async (req, res) => {
       email,
       address,
       complaint,
-      visitDate,
     } = req.body;
 
     if (!fullName || !phone || !email) {
       return res.status(400).json({
         error: 'Nama lengkap, nomor HP, dan email wajib diisi.',
-      });
-    }
-
-    const parsedVisitDate = parseDateInput(visitDate);
-    if (visitDate && !parsedVisitDate) {
-      return res.status(400).json({
-        error: 'Tanggal kunjungan tidak valid. Gunakan format dd/mm/yyyy.',
       });
     }
 
@@ -349,7 +348,8 @@ app.post('/api/registrations', async (req, res) => {
       });
     }
 
-    const queueDate = parsedVisitDate || getJakartaDate();
+    // Queue number resets daily at 24:00 WIB.
+    const queueDate = getJakartaDate();
 
     const client = await pool.connect();
     try {

@@ -93,8 +93,14 @@
               <textarea name="complaint" rows="3" placeholder="Tuliskan keluhan singkat"></textarea>
             </label>
             <label>
-              Tanggal Kunjungan
-              <input type="text" name="visitDate" class="date-picker" placeholder="dd/mm/yyyy" />
+              Tanggal Kunjungan (otomatis hari ini)
+              <input
+                type="text"
+                name="visitDate"
+                class="date-picker"
+                placeholder="dd/mm/yyyy"
+                readonly
+              />
             </label>
           </div>
           <button type="submit" class="primary" id="submit-button">
