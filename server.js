@@ -3,6 +3,7 @@ const fs = require('fs');
 const express = require('express');
 const { Pool } = require('pg');
 const nodemailer = require('nodemailer');
+const twilio = require('twilio');
 const { Jimp, loadFont, HorizontalAlign } = require('jimp');
 const { SANS_14_BLACK, SANS_16_BLACK, SANS_32_BLACK } = require('@jimp/plugin-print/fonts');
 const QRCode = require('qrcode');
@@ -62,6 +63,15 @@ const smtpEnabled = Boolean(
     process.env.SMTP_HOST !== 'smtp.example.com'
 );
 const resendEnabled = Boolean(process.env.RESEND_API_KEY && process.env.SMTP_FROM);
+const whatsappEnabled = Boolean(
+  process.env.TWILIO_WHATSAPP_ENABLED === 'true' &&
+    process.env.TWILIO_ACCOUNT_SID &&
+    process.env.TWILIO_AUTH_TOKEN &&
+    process.env.TWILIO_WHATSAPP_FROM
+);
+const twilioClient = whatsappEnabled
+  ? twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN)
+  : null;
 const replyToTarget = (process.env.REPLY_TO_TARGET || 'admin').toLowerCase();
 const replyToAdmin = process.env.REPLY_TO_ADMIN;
 
@@ -233,6 +243,35 @@ async function buildRegistrationImage(data) {
   });
 
   return image.getBuffer('image/jpeg');
+}
+
+function normalizePhoneToWhatsapp(phone) {
+  if (!phone) return null;
+  const cleaned = String(phone).replace(/[^\d+]/g, '');
+  if (cleaned.startsWith('+')) {
+    return cleaned.startsWith('+62') ? `whatsapp:${cleaned}` : null;
+  }
+  if (cleaned.startsWith('62')) return `whatsapp:+${cleaned}`;
+  if (cleaned.startsWith('0')) return `whatsapp:+62${cleaned.slice(1)}`;
+  return null;
+}
+
+async function sendWhatsAppMessage({ toPhone, message }) {
+  if (!whatsappEnabled || !twilioClient) {
+    return { skipped: true };
+  }
+  const to = normalizePhoneToWhatsapp(toPhone);
+  if (!to) {
+    throw new Error('Nomor WhatsApp tidak valid. Gunakan format Indonesia (+62 atau 08...).');
+  }
+
+  await twilioClient.messages.create({
+    from: process.env.TWILIO_WHATSAPP_FROM,
+    to,
+    body: message,
+  });
+
+  return { skipped: false };
 }
 
 async function sendEmail({ to, subject, text, html, attachments, replyTo }) {
@@ -518,6 +557,24 @@ app.post('/api/registrations', async (req, res) => {
             });
           } catch (emailError) {
             console.error('Email send failed:', emailError);
+          }
+        });
+      }
+
+      if (whatsappEnabled) {
+        setImmediate(async () => {
+          try {
+            await sendWhatsAppMessage({
+              toPhone: phone,
+              message:
+                `Konfirmasi Pendaftaran Klinik\n\n` +
+                `Nama: ${fullName}\n` +
+                `Nomor antrean: ${queueNumber}\n` +
+                `Tanggal kunjungan: ${displayVisitDate}\n` +
+                `Unduh bukti: ${downloadUrl}`,
+            });
+          } catch (whatsappError) {
+            console.error('WhatsApp send failed:', whatsappError);
           }
         });
       }
