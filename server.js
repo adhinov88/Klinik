@@ -25,14 +25,8 @@ const pool = new Pool({
   password: process.env.PGPASSWORD,
   database: process.env.PGDATABASE,
   port: process.env.PGPORT ? Number(process.env.PGPORT) : undefined,
+  options: '-c timezone=Asia/Jakarta',
   ssl: process.env.DATABASE_SSL === 'true' ? { rejectUnauthorized: false } : undefined,
-});
-
-// Ensure DB session uses WIB for date/time operations in this app.
-pool.on('connect', (client) => {
-  client.query("SET TIME ZONE 'Asia/Jakarta'").catch((error) => {
-    console.error('Failed to set DB timezone:', error);
-  });
 });
 
 async function ensureSchema() {
