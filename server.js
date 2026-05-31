@@ -1,5 +1,6 @@
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 const express = require('express');
 const { Pool } = require('pg');
 const nodemailer = require('nodemailer');
@@ -13,6 +14,11 @@ const app = express();
 const port = process.env.PORT || 3000;
 const baseUrl = process.env.PUBLIC_BASE_URL || `http://localhost:${port}`;
 const attachmentDir = path.join(__dirname, 'storage', 'documents');
+const adminSessionCookieName = 'klinik_admin_session';
+const adminSessionTtlMs = 1000 * 60 * 60 * 8; // 8 jam
+const adminSessions = new Map();
+const adminUsername = process.env.ADMIN_USERNAME || 'admin';
+const adminPassword = process.env.ADMIN_PASSWORD || 'admin12345';
 
 if (!fs.existsSync(attachmentDir)) {
   fs.mkdirSync(attachmentDir, { recursive: true });
@@ -34,6 +40,11 @@ async function ensureSchema() {
   try {
     await client.query(`ALTER TABLE registrations ADD COLUMN IF NOT EXISTS queue_date DATE`);
     await client.query(`
+      ALTER TABLE registrations
+      ADD COLUMN IF NOT EXISTS registration_status VARCHAR(24) NOT NULL DEFAULT 'registered'
+    `);
+    await client.query(`ALTER TABLE registrations ADD COLUMN IF NOT EXISTS checked_in_at TIMESTAMPTZ`);
+    await client.query(`
       UPDATE registrations
       SET queue_date = (created_at AT TIME ZONE 'Asia/Jakarta')::date
       WHERE queue_date IS NULL
@@ -42,6 +53,10 @@ async function ensureSchema() {
     await client.query(`
       CREATE INDEX IF NOT EXISTS registrations_queue_date_idx
       ON registrations (queue_date, queue_number)
+    `);
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS registrations_visit_date_status_idx
+      ON registrations (visit_date, registration_status)
     `);
   } finally {
     client.release();
@@ -68,6 +83,285 @@ const twilioClient = whatsappEnabled
   : null;
 const replyToTarget = (process.env.REPLY_TO_TARGET || 'admin').toLowerCase();
 const replyToAdmin = process.env.REPLY_TO_ADMIN;
+
+function sanitizeHtml(value = '') {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function parseCookies(header = '') {
+  return header
+    .split(';')
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .reduce((acc, item) => {
+      const eqIdx = item.indexOf('=');
+      if (eqIdx <= 0) return acc;
+      const key = item.slice(0, eqIdx).trim();
+      const val = item.slice(eqIdx + 1).trim();
+      acc[key] = decodeURIComponent(val);
+      return acc;
+    }, {});
+}
+
+function createAdminSession(username) {
+  const token = crypto.randomBytes(32).toString('hex');
+  adminSessions.set(token, {
+    username,
+    expiresAt: Date.now() + adminSessionTtlMs,
+  });
+  return token;
+}
+
+function setAdminSessionCookie(res, token) {
+  const secureFlag = process.env.NODE_ENV === 'production' ? '; Secure' : '';
+  res.setHeader(
+    'Set-Cookie',
+    `${adminSessionCookieName}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=28800${secureFlag}`
+  );
+}
+
+function clearAdminSessionCookie(res) {
+  const secureFlag = process.env.NODE_ENV === 'production' ? '; Secure' : '';
+  res.setHeader(
+    'Set-Cookie',
+    `${adminSessionCookieName}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secureFlag}`
+  );
+}
+
+function getAdminSession(req) {
+  const cookies = parseCookies(req.headers.cookie || '');
+  const token = cookies[adminSessionCookieName];
+  if (!token) return null;
+  const session = adminSessions.get(token);
+  if (!session) return null;
+  if (session.expiresAt < Date.now()) {
+    adminSessions.delete(token);
+    return null;
+  }
+  return { token, ...session };
+}
+
+function requireAdminAuth(req, res, next) {
+  const session = getAdminSession(req);
+  if (!session) {
+    if (req.path.startsWith('/api/')) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+    return res.redirect('/admin/login');
+  }
+  req.adminSession = session;
+  return next();
+}
+
+function clearExpiredAdminSessions() {
+  const now = Date.now();
+  for (const [token, session] of adminSessions.entries()) {
+    if (session.expiresAt < now) {
+      adminSessions.delete(token);
+    }
+  }
+}
+
+setInterval(clearExpiredAdminSessions, 1000 * 60 * 10).unref();
+
+function buildAdminLoginPage(errorCode = '') {
+  const errorMap = {
+    invalid: 'Username atau password salah.',
+    missing: 'Username dan password wajib diisi.',
+  };
+  const message = errorMap[errorCode] || '';
+  return `<!doctype html>
+<html lang="id">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Admin Login - Klinik</title>
+    <style>
+      body { font-family: Arial, sans-serif; background:#0b1f5e; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; }
+      .card { width:100%; max-width:360px; background:#fff; border-radius:14px; padding:24px; box-shadow:0 10px 32px rgba(0,0,0,.25); }
+      h1 { margin:0 0 16px; font-size:24px; color:#0f172a; }
+      label { display:block; font-weight:700; margin:12px 0 6px; color:#334155; }
+      input { width:100%; box-sizing:border-box; padding:10px 12px; border:1px solid #cbd5e1; border-radius:8px; font-size:15px; }
+      button { width:100%; margin-top:16px; border:none; background:#0f766e; color:#fff; padding:12px; border-radius:9px; font-weight:700; cursor:pointer; }
+      .error { margin-top:10px; background:#fef2f2; color:#991b1b; border:1px solid #fecaca; border-radius:8px; padding:10px; font-size:14px; }
+      .hint { margin-top:12px; font-size:12px; color:#64748b; }
+    </style>
+  </head>
+  <body>
+    <form class="card" method="POST" action="/admin/login" autocomplete="off">
+      <h1>Login Admin</h1>
+      <label for="username">Username</label>
+      <input id="username" name="username" required />
+      <label for="password">Password</label>
+      <input id="password" type="password" name="password" required />
+      <button type="submit">Masuk</button>
+      ${message ? `<div class="error">${sanitizeHtml(message)}</div>` : ''}
+      <div class="hint">Akses admin khusus petugas klinik.</div>
+    </form>
+  </body>
+</html>`;
+}
+
+function buildAdminDashboardPage() {
+  return `<!doctype html>
+<html lang="id">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Dashboard Admin Klinik</title>
+    <style>
+      body { font-family: Arial, sans-serif; margin:0; background:#f1f5f9; color:#0f172a; }
+      .wrap { max-width:1100px; margin:24px auto; padding:0 16px; }
+      .topbar { display:flex; justify-content:space-between; gap:12px; align-items:center; margin-bottom:16px; }
+      .topbar h1 { margin:0; font-size:24px; }
+      .controls { display:flex; gap:8px; align-items:center; margin-bottom:12px; flex-wrap:wrap; }
+      .card { background:#fff; border-radius:12px; box-shadow:0 3px 20px rgba(15,23,42,.08); padding:14px; }
+      table { width:100%; border-collapse:collapse; font-size:14px; }
+      th, td { border-bottom:1px solid #e2e8f0; text-align:left; padding:10px 8px; vertical-align:top; }
+      th { background:#f8fafc; font-weight:700; color:#334155; }
+      .status { display:inline-block; padding:4px 8px; border-radius:999px; font-size:12px; font-weight:700; }
+      .registered { background:#e0f2fe; color:#075985; }
+      .checked_in { background:#dcfce7; color:#166534; }
+      button { border:none; border-radius:8px; padding:8px 10px; font-weight:700; cursor:pointer; }
+      .btn-checkin { background:#0f766e; color:#fff; }
+      .btn-refresh { background:#1d4ed8; color:#fff; }
+      .muted { color:#64748b; }
+      .msg { margin:8px 0 0; font-size:13px; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="topbar">
+        <h1>Dashboard Admin Klinik</h1>
+        <form method="POST" action="/admin/logout">
+          <button type="submit">Logout</button>
+        </form>
+      </div>
+      <div class="card">
+        <div class="controls">
+          <label for="visitDate">Tanggal Kunjungan:</label>
+          <input id="visitDate" type="date" />
+          <button class="btn-refresh" id="btnRefresh" type="button">Muat Data</button>
+          <span id="summary" class="muted"></span>
+        </div>
+        <div class="msg" id="message"></div>
+        <div style="overflow:auto;">
+          <table id="table">
+            <thead>
+              <tr>
+                <th>No Antrean</th>
+                <th>Nama</th>
+                <th>No HP</th>
+                <th>Email</th>
+                <th>Keluhan</th>
+                <th>Status</th>
+                <th>Aksi</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+    <script>
+      const visitDateInput = document.getElementById('visitDate');
+      const tbody = document.querySelector('#table tbody');
+      const summary = document.getElementById('summary');
+      const message = document.getElementById('message');
+      const btnRefresh = document.getElementById('btnRefresh');
+
+      function setMessage(text, isError = false) {
+        message.textContent = text || '';
+        message.style.color = isError ? '#b91c1c' : '#0f766e';
+      }
+
+      function getTodayYmd() {
+        const parts = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jakarta', year:'numeric', month:'2-digit', day:'2-digit' }).formatToParts(new Date());
+        const y = parts.find((p) => p.type === 'year').value;
+        const m = parts.find((p) => p.type === 'month').value;
+        const d = parts.find((p) => p.type === 'day').value;
+        return y + '-' + m + '-' + d;
+      }
+
+      function escapeHtml(str) {
+        return String(str || '')
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#39;');
+      }
+
+      async function loadRegistrations() {
+        const date = visitDateInput.value || getTodayYmd();
+        setMessage('Memuat data...');
+        const res = await fetch('/api/admin/registrations?date=' + encodeURIComponent(date));
+        if (!res.ok) {
+          if (res.status === 401) {
+            window.location.href = '/admin/login';
+            return;
+          }
+          const body = await res.json().catch(() => ({}));
+          throw new Error(body.error || 'Gagal memuat data');
+        }
+        const data = await res.json();
+        tbody.innerHTML = '';
+
+        for (const row of data.items) {
+          const tr = document.createElement('tr');
+          const statusClass = row.registrationStatus === 'checked_in' ? 'checked_in' : 'registered';
+          tr.innerHTML = \`
+            <td>\${row.queueNumber}</td>
+            <td>\${escapeHtml(row.fullName)}</td>
+            <td>\${escapeHtml(row.phone || '-')}</td>
+            <td>\${escapeHtml(row.email || '-')}</td>
+            <td>\${escapeHtml(row.complaint || '-')}</td>
+            <td><span class="status \${statusClass}">\${row.registrationStatus === 'checked_in' ? 'Check-in' : 'Terdaftar'}</span></td>
+            <td>\${row.registrationStatus === 'checked_in'
+              ? '<span class="muted">Selesai</span>'
+              : '<button class="btn-checkin" data-id="' + row.id + '">Check-in</button>'}</td>
+          \`;
+          tbody.appendChild(tr);
+        }
+
+        summary.textContent = 'Total: ' + data.items.length + ' pasien';
+        setMessage('Data terbaru dimuat.');
+      }
+
+      tbody.addEventListener('click', async (event) => {
+        const btn = event.target.closest('button[data-id]');
+        if (!btn) return;
+        const id = btn.getAttribute('data-id');
+        btn.disabled = true;
+        btn.textContent = 'Proses...';
+        try {
+          const res = await fetch('/api/admin/checkin/' + encodeURIComponent(id), { method: 'POST' });
+          if (!res.ok) {
+            const body = await res.json().catch(() => ({}));
+            throw new Error(body.error || 'Gagal check-in');
+          }
+          setMessage('Pasien berhasil check-in.');
+          await loadRegistrations();
+        } catch (err) {
+          setMessage(err.message || 'Gagal check-in', true);
+        }
+      });
+
+      btnRefresh.addEventListener('click', () => {
+        loadRegistrations().catch((err) => setMessage(err.message || 'Gagal memuat data', true));
+      });
+
+      visitDateInput.value = getTodayYmd();
+      loadRegistrations().catch((err) => setMessage(err.message || 'Gagal memuat data', true));
+    </script>
+  </body>
+</html>`;
+}
 
 function getJakartaDate() {
   const formatter = new Intl.DateTimeFormat('en-CA', {
@@ -343,6 +637,120 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(express.static(path.join(__dirname, 'public')));
 
+app.get('/admin/login', (req, res) => {
+  const session = getAdminSession(req);
+  if (session) {
+    return res.redirect('/admin');
+  }
+  const errorCode = String(req.query.error || '');
+  return res.status(200).send(buildAdminLoginPage(errorCode));
+});
+
+app.post('/admin/login', (req, res) => {
+  const usernameInput = String(req.body.username || '').trim();
+  const passwordInput = String(req.body.password || '').trim();
+
+  if (!usernameInput || !passwordInput) {
+    return res.redirect('/admin/login?error=missing');
+  }
+
+  if (usernameInput !== adminUsername || passwordInput !== adminPassword) {
+    return res.redirect('/admin/login?error=invalid');
+  }
+
+  const token = createAdminSession(usernameInput);
+  setAdminSessionCookie(res, token);
+  return res.redirect('/admin');
+});
+
+app.post('/admin/logout', (req, res) => {
+  const session = getAdminSession(req);
+  if (session?.token) {
+    adminSessions.delete(session.token);
+  }
+  clearAdminSessionCookie(res);
+  return res.redirect('/admin/login');
+});
+
+app.get('/admin', requireAdminAuth, (req, res) => {
+  return res.status(200).send(buildAdminDashboardPage());
+});
+
+app.get('/api/admin/registrations', requireAdminAuth, async (req, res) => {
+  try {
+    const selectedDate = String(req.query.date || getJakartaDate());
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(selectedDate)) {
+      return res.status(400).json({ error: 'Format tanggal tidak valid (yyyy-mm-dd).' });
+    }
+
+    const result = await pool.query(
+      `SELECT
+        id,
+        full_name,
+        phone,
+        email,
+        complaint,
+        queue_number,
+        registration_status,
+        visit_date,
+        checked_in_at
+      FROM registrations
+      WHERE visit_date = $1
+      ORDER BY queue_number ASC, created_at ASC`,
+      [selectedDate]
+    );
+
+    return res.json({
+      date: selectedDate,
+      items: result.rows.map((row) => ({
+        id: row.id,
+        fullName: row.full_name,
+        phone: row.phone,
+        email: row.email,
+        complaint: row.complaint,
+        queueNumber: row.queue_number,
+        registrationStatus: row.registration_status || 'registered',
+        visitDate: row.visit_date,
+        checkedInAt: row.checked_in_at,
+      })),
+    });
+  } catch (error) {
+    console.error('Admin list error:', error);
+    return res.status(500).json({ error: 'Gagal memuat data pendaftaran.' });
+  }
+});
+
+app.post('/api/admin/checkin/:id', requireAdminAuth, async (req, res) => {
+  try {
+    const registrationId = Number(req.params.id);
+    if (!Number.isInteger(registrationId) || registrationId <= 0) {
+      return res.status(400).json({ error: 'ID registrasi tidak valid.' });
+    }
+
+    const updateResult = await pool.query(
+      `UPDATE registrations
+       SET registration_status = 'checked_in',
+           checked_in_at = NOW()
+       WHERE id = $1
+       RETURNING id, registration_status, checked_in_at`,
+      [registrationId]
+    );
+
+    if (updateResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Data pendaftaran tidak ditemukan.' });
+    }
+
+    return res.json({
+      id: updateResult.rows[0].id,
+      registrationStatus: updateResult.rows[0].registration_status,
+      checkedInAt: updateResult.rows[0].checked_in_at,
+    });
+  } catch (error) {
+    console.error('Admin check-in error:', error);
+    return res.status(500).json({ error: 'Gagal melakukan check-in.' });
+  }
+});
+
 app.get('/health', (req, res) => {
   res.json({ status: 'ok' });
 });
@@ -595,6 +1003,9 @@ app.post('/api/registrations', async (req, res) => {
 
 ensureSchema()
   .then(() => {
+    if (!process.env.ADMIN_PASSWORD) {
+      console.warn('ADMIN_PASSWORD belum di-set. Default password aktif, segera ganti di environment.');
+    }
     app.listen(port, () => {
       console.log(`Server running at http://localhost:${port}`);
     });

@@ -16,6 +16,8 @@ CREATE TABLE IF NOT EXISTS registrations (
   visit_date DATE NOT NULL,
   queue_date DATE NOT NULL,
   queue_number INTEGER NOT NULL,
+  registration_status VARCHAR(24) NOT NULL DEFAULT 'registered',
+  checked_in_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -24,3 +26,6 @@ CREATE INDEX IF NOT EXISTS registrations_queue_date_idx
 
 CREATE INDEX IF NOT EXISTS registrations_visit_date_idx
   ON registrations (visit_date);
+
+CREATE INDEX IF NOT EXISTS registrations_visit_date_status_idx
+  ON registrations (visit_date, registration_status);
